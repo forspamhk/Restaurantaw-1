@@ -2,43 +2,76 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="Restaurantauswertung", layout="wide")
+st.title("📊 Tägliche Restaurantauswertung")
 
-st.title("📊 Restaurantauswertung")
-
-uploaded_file = st.file_uploader("Excel-Datei hochladen", type=["xlsx"])
+uploaded_file = st.file_uploader("Excel-Datei hochladen (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
+    try:
+        # Excel einlesen
+        df = pd.read_excel(uploaded_file)
 
-    df = pd.read_excel(uploaded_file)
-    df["Datum"] = pd.to_datetime(df["Datum"])
+        # Spaltennamen standardisieren (falls Tippfehler oder Leerzeichen)
+        df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
-    # Umsätze
-    df["Gesamtumsatz"] = df["Umsatz_Speisen"] + df["Umsatz_Getraenke"]
+        # Zahlen sauber konvertieren (Text → Zahl)
+        numeric_cols = [
+            "Umsatz_Speisen", "Umsatz_Getraenke", 
+            "EK_Speisen", "EK_Getraenke", 
+            "Personal_Service", "Personal_Kueche", 
+            "Stunden", "Gaeste"
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            else:
+                st.warning(f"Spalte {col} fehlt in der Excel! Wird mit 0 gefüllt.")
+                df[col] = 0
 
-    # Wareneinsatz
-    df["Wareneinsatz_Speisen"] = df["Umsatz_Speisen"] - df["EK_Speisen"]
-    df["Wareneinsatz_Getraenke"] = df["Umsatz_Getraenke"] - df["EK_Getraenke"]
+        # Datum sauber konvertieren
+        if "Datum" in df.columns:
+            df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+        else:
+            st.error("Spalte 'Datum' fehlt!")
+            st.stop()
 
-    df["Wareneinsatz_%_Speisen"] = df["EK_Speisen"] / df["Umsatz_Speisen"] * 100
-    df["Wareneinsatz_%_Getraenke"] = df["EK_Getraenke"] / df["Umsatz_Getraenke"] * 100
+        # Berechnungen
+        df["Gesamtumsatz"] = df["Umsatz_Speisen"] + df["Umsatz_Getraenke"]
 
-    # Personal
-    df["Personal_Gesamt"] = df["Personal_Service"] + df["Personal_Kueche"]
-    df["Personalkosten_%"] = df["Personal_Gesamt"] / df["Gesamtumsatz"] * 100
+        df["Wareneinsatz_Speisen"] = df["Umsatz_Speisen"] - df["EK_Speisen"]
+        df["Wareneinsatz_Getraenke"] = df["Umsatz_Getraenke"] - df["EK_Getraenke"]
 
-    # Kennzahlen
-    df["Umsatz_pro_Stunde"] = df["Gesamtumsatz"] / df["Stunden"]
-    df["Umsatz_pro_Gast"] = df["Gesamtumsatz"] / df["Gaeste"]
+        df["Wareneinsatz_%_Speisen"] = df.apply(
+            lambda x: (x["EK_Speisen"]/x["Umsatz_Speisen"]*100) if x["Umsatz_Speisen"]>0 else 0, axis=1)
+        df["Wareneinsatz_%_Getraenke"] = df.apply(
+            lambda x: (x["EK_Getraenke"]/x["Umsatz_Getraenke"]*100) if x["Umsatz_Getraenke"]>0 else 0, axis=1)
 
-    df["Deckungsbeitrag"] = df["Wareneinsatz_Speisen"] + df["Wareneinsatz_Getraenke"]
-    df["Betriebsergebnis"] = df["Deckungsbeitrag"] - df["Personal_Gesamt"]
+        df["Personal_Gesamt"] = df["Personal_Service"] + df["Personal_Kueche"]
+        df["Personalkosten_%"] = df.apply(
+            lambda x: (x["Personal_Gesamt"]/x["Gesamtumsatz"]*100) if x["Gesamtumsatz"]>0 else 0, axis=1)
 
-    st.subheader("Tagesübersicht")
-    st.dataframe(df.round(2))
+        df["Umsatz_pro_Stunde"] = df.apply(
+            lambda x: (x["Gesamtumsatz"]/x["Stunden"]) if x["Stunden"]>0 else 0, axis=1)
+        df["Umsatz_pro_Gast"] = df.apply(
+            lambda x: (x["Gesamtumsatz"]/x["Gaeste"]) if x["Gaeste"]>0 else 0, axis=1)
 
-    # Monatsauswertung
-    df["Monat"] = df["Datum"].dt.to_period("M")
-    monat = df.groupby("Monat").sum(numeric_only=True)
+        df["Deckungsbeitrag"] = df["Wareneinsatz_Speisen"] + df["Wareneinsatz_Getraenke"]
+        df["Betriebsergebnis"] = df["Deckungsbeitrag"] - df["Personal_Gesamt"]
 
-    st.subheader("Monatsübersicht")
-    st.dataframe(monat.round(2))
+        # Tagesübersicht
+        st.subheader("📅 Tagesübersicht")
+        st.dataframe(df.round(2))
+
+        # Monatsauswertung
+        df["Monat"] = df["Datum"].dt.to_period("M")
+        monat = df.groupby("Monat").sum(numeric_only=True)
+        st.subheader("📈 Monatsübersicht")
+        st.dataframe(monat.round(2))
+
+        # Optional: Diagramm
+        st.subheader("💹 Umsatz Verlauf")
+        st.line_chart(df.set_index("Datum")[["Gesamtumsatz", "Umsatz_Speisen", "Umsatz_Getraenke"]])
+
+    except Exception as e:
+        st.error(f"Fehler beim Verarbeiten der Excel-Datei: {e}")
+
